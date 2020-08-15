@@ -1,0 +1,154 @@
+---
+title: "Settlement Dimorphism Statistics"
+author: "Maria E. Feiler, MSc"
+date: "8/12/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/', warning=FALSE, message=FALSE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(broom)
+library(purrr)
+library(ggplot2)
+```
+
+# Urbanization and Sexual Dimorphism
+This document outlines the statistical procedures used to analyze population variation in sexual dimorphism due to urbanization via 5 nonmetric traits of the cranium and 4 nonmetric traits of the os coxa in two post-Medieval Dutch samples from Middenbeemster and Arnhem. 
+
+The raw data is available at the author's [ResearchGate](https://www.researchgate.net/project/Urbanizations-Effects-on-Sexual-Dimorphism-in-the-Post-Medieval-Dutch/update/5f34232ded60840001c6a2fa) for download. Load the .csv file from the working directory and clean headers as follows: 
+
+```{r download}
+settlement <- read.csv("https://www.researchgate.net/profile/Maria_Feiler/project/Urbanizations-Effects-on-Sexual-Dimorphism-in-the-Post-Medieval-Dutch/attachment/5f343add5dcc010001caf900/AS:923783095390208@1597258461199/download/SettlementDimorphismRawData.csv?context=projectUpdateDetail")
+names(settlement)[1] <- "Individual"
+```
+
+The R packages needed for these analyses are as follows: broom, purrr, ggplot2.
+
+Please note that for the duration of this analysis, 1 denotes a sex estimation of "Female" and 2 denotes a sex estimation of "Male." 
+
+# Nonmetric Trait Asymetry
+First, symmetry in the bilateral nonmetric traits needs to be confirmed. If the sides differ significantly for the population, then both must be considered. Otherwise, the left will be used as a proxy, as the left is used in both Klales et al. 2012 and Walker 2008. Symmetry will be determined by independent t-test assuming equal variance. 
+
+```{r asymetry}
+##Conducting t-tests and saving to lists.
+MASttest <- t.test(settlement$L.Mastoid, settlement$R.Mastoid, var.equal = TRUE)
+SOMttest <- t.test(settlement$L.Supra.Orbital.Margin, settlement$R.Supra.Orbital.Margin, var.equal = TRUE)
+VAttest <- t.test(settlement$L.Ventral.Arc, settlement$R.Ventral.Arc, var.equal = TRUE)
+SPCttest <- t.test(settlement$L.Subpubic.Concavity, settlement$R.Subpubic.Concavity, var.equal = TRUE)
+IPRttest <- t.test(settlement$L.Ischiopubic.Ramus, settlement$R.Ischiopubic.Ramus, var.equal = TRUE)
+GSNttest <- t.test(settlement$L.Sciatic.Notch, settlement$R.Sciatic.Notch, var.equal = TRUE)
+
+##Creating table with t-test results.
+ttests <- c("MASttest", "SOMttest", "VAttest", "SPCttest", "IPRttest", "GSNttest")
+asymttests <- map_df(list(MASttest, SOMttest, VAttest, SPCttest, IPRttest, GSNttest), tidy)
+asymttests <- cbind(ttests, asymttests)
+asymttests <- as.data.frame(asymttests[,c("ttests", "statistic", "p.value", "conf.low", "conf.high")])
+print(asymttests)
+```
+
+As all p-values show no statistical significance between the left and right sides of bilateral traits, only the left will be used for statistical analysis moving forward due to statistically significant symmetry.  
+
+# Sex Estimations
+The following sex estimations were produced using Klales et al. (2012) for the pubic traits and Walker's (2005) method for "white" individuals for the cranial traits. 
+
+## Determining Sex Probabilities from Pubic Traits 
+The pubic traits must all be scored to gain a male and female probability of each individual (Klales et al. 2012). The score for each pubis must first be calculated using: 
+
+2.7626(Ventral Arc) + 1.214(Medial Aspect of Ischiopubic Ramus) + 1.073(Subpubic Concavity) - 16.312
+
+Then a female and male probability can be calculated by pf = 1/(1 + e^score) and pm = 1 - pf, respectively. Finally, based on those probabilities, a sex estimation from the pubic traits can be acquired.
+
+```{r klales estimation}
+##Calculating score for left pubic traits and binding to dataframe.
+Pubic.Score <- apply(X = settlement[,c("L.Ventral.Arc", "L.Ischiopubic.Ramus", "L.Subpubic.Concavity")],
+                     MARGIN = 1, 
+                     FUN = function(x) {2.7626*x[1] + 1.214*x[2] + 1.073*x[3] - 16.312}
+                     )
+settlement <- cbind(settlement, Pubic.Score)
+
+##Calculating female probability for left pubic traits and binding to dataframe.
+Pubic.pFemale <- apply(X = settlement[,c("Pubic.Score"), drop = F], 
+                       MARGIN = 1, 
+                       FUN = function(x) {1/(1 + exp(x[1]))} 
+                       )
+settlement <- cbind(settlement, Pubic.pFemale)
+
+##Calculating male probability for left pubic traits and binding to dataframe.
+Pubic.pMale <- apply(X = settlement[,c("Pubic.pFemale"), drop = F], MARGIN = 1, FUN = function(x) {1 - x[1]} )
+settlement <- cbind(settlement, Pubic.pMale)
+
+##Producing pubic sex estimation column from the pubic traits, designating "Male" or "Female".
+settlement$Pubic.Sex.Est <- ifelse(settlement$Pubic.pMale > Pubic.pFemale, 
+                                   2, 
+                                   1
+                                   )
+```
+
+## Determining Sex Probabilities from Cranial Traits 
+The cranial traits must all be scored to gain a male and female probability of each individual (Walker 2008). The score for each cranium must first be calculated using the most applicable logistic regression based on traits present and each result's accuracy. Here they are presented in order of most to least accurate, as well as the least to most sex bias (see Walker 2008). 
+
+(Glabella)(-1.375) + (Mastoid Process)(-1.185) + (Mental Eminence)(-1.15) + 9.128
+(Glabella)(-1.558) + (Mastoid Process)(-1.459) + 7.434
+(Glabella)(-1.525) + (Mental Eminence)(-1.485) + 7.372
+(Mental Eminence)(-1.415) + (Mastoid Process)(-1.629) + 7.382
+(Supraorbital Margin)(-1.007) + (Mental Eminence)(-1.85) + 6.018
+(Nuchal Crest)(-0.7) + (Mental Eminence)(-1.559) + 5.329
+
+Once a score is calculated, then a female and male probability can be calculated by pf = 1/(1 + e^-score) and pm = 1 - pf, respectively. Finally, based on those probabilities, a sex estimation from the cranial traits can be acquired.
+
+```{r walker estimation}
+##Calculating score for cranial traits (using left for bilateral traits) and binding to dataframe.
+Cranial.Score <- apply(X = settlement[,c("Nuchal.Crest", "L.Mastoid", "L.Supra.Orbital.Margin", "Glabella", 
+                                         "Mental.Eminence")], 
+                       MARGIN = 1, 
+                       FUN = function(x = NA) {GlaMasMen <- x[4]*(-1.375) + x[2]*(-1.185) + x[5]*(-1.15) + 9.128
+                                               GlaMas <- x[4]*(-1.558) + x[2]*(-1.459) + 7.434
+                                               GlaMen <- x[4]*(-1.525) + x[5]*(-1.485) + 7.372
+                                               MenMas <- x[5]*(-1.415) + x[2]*(-1.629) + 7.382
+                                               SomMen <- x[3]*(-1.007) + x[5]*(-1.85) + 6.018
+                                               NucMen <- x[1]*(-0.7) + x[5]*(-1.559) + 5.329
+                                               if (!is.na(GlaMasMen)) {return(GlaMasMen)}
+                                               else if (!is.na(GlaMas)) {return(GlaMas)}
+                                               else if (!is.na(GlaMen)) {return(GlaMen)}
+                                               else if (!is.na(MenMas)) {return(MenMas)}
+                                               else if (!is.na(SomMen)) {return(SomMen)}
+                                               else if (!is.na(NucMen)) {return(NucMen)}
+                                               else return("NA")
+                                               }
+                       )
+
+settlement <- cbind(settlement, Cranial.Score)
+settlement$Cranial.Score <- as.numeric(settlement$Cranial.Score)
+
+##Calculating female probability for cranial traits and binding to dataframe.
+Cranial.pFemale <- apply(X = settlement[,c("Cranial.Score"), drop = F], 
+                       MARGIN = 1, 
+                       FUN = function(x) {1/(1 + exp(-(x[1])))} 
+                       )
+settlement <- cbind(settlement, Cranial.pFemale)
+
+##Calculating male probability for cranial traits and binding to dataframe.
+Cranial.pMale <- apply(X = settlement[,c("Cranial.pFemale"), drop = F], MARGIN = 1, FUN = function(x) {1 - x[1]} )
+settlement <- cbind(settlement, Cranial.pMale)
+
+##Producing pubic sex estimation column from the cranial traits, designating "Male" or "Female".
+settlement$Cranial.Sex.Est <- ifelse(settlement$Cranial.pMale > Cranial.pFemale, 
+                                    2, 
+                                    1
+                                    )
+```
+
+## Determining Sex Estimation for Greater Sciatic Notch
+As per Buikstra and Ubelaker (1995), a score of 3 will be considered indeterminate, while a score above 3 will be considered male and below 3 will be considered female. 
+
+```{r greater sciatic notch estimation}
+settlement$GSN.Sex.Est <- if (settlement$L.Sciatic.Notch >= 4) {return("2")} else if (settlement$L.Sciatic.Notch <= 2) {return("1")} else {return("NA")}
+```
+
+## Final Sex Estimations 
+Based on the results of the 
